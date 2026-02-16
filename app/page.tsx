@@ -1,22 +1,33 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
+import { createClient } from '@supabase/supabase-js';
 
+// --- SUPABASE SETUP ---
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+);
+
+// --- CONFIGURATION ---
 const ROTATION = ['James', 'Mark', 'Jayp', 'Ken', 'Mel', 'Gian', 'JC'];
 const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 const TIME_ZONE = 'Asia/Manila';
-const ANCHOR_WEEK_START = Date.UTC(2026, 1, 9);
+const ANCHOR_WEEK_START = Date.UTC(2026, 1, 9); // Feb 9, 2026
 const ANCHOR_START_INDEX = 0;
 const HOLIDAYS: Record<string, string> = {
   '2026-02-17': 'Holiday',
+  '2026-02-25': 'EDSA Revolution',
 };
-const MANILA_OFFSET_HOURS = 8;
 
+// --- TYPES ---
 type DayAssignment = {
   date: Date;
   weekday: string;
-  cleaner: string | null;
+  displayCleaner: string | null;
+  statusLabel: string | null;
   isHoliday: boolean;
+  holidayName?: string;
   key: string;
 };
 
@@ -25,7 +36,8 @@ type Confirmation = {
   cleanedBy?: string;
 };
 
-function getManilaDateParts(date: Date): { year: number; month: number; day: number } {
+// --- HELPER FUNCTIONS ---
+function getManilaDateParts(date: Date) {
   const formatter = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE,
     year: 'numeric',
@@ -36,34 +48,30 @@ function getManilaDateParts(date: Date): { year: number; month: number; day: num
   const year = Number(parts.find((part) => part.type === 'year')?.value ?? '0');
   const month = Number(parts.find((part) => part.type === 'month')?.value ?? '1');
   const day = Number(parts.find((part) => part.type === 'day')?.value ?? '1');
-
   return { year, month, day };
 }
 
-function getManilaWeekStart(date: Date): Date {
+function getManilaWeekStart(date: Date) {
   const { year, month, day } = getManilaDateParts(date);
   const manilaMidnightUtc = new Date(Date.UTC(year, month - 1, day));
   const weekday = manilaMidnightUtc.getUTCDay();
   const diff = weekday === 0 ? -6 : 1 - weekday;
   manilaMidnightUtc.setUTCDate(manilaMidnightUtc.getUTCDate() + diff);
-
   return manilaMidnightUtc;
 }
 
-function formatDateRange(weekStart: Date): string {
+function formatDateRange(weekStart: Date) {
   const weekEnd = new Date(weekStart);
   weekEnd.setUTCDate(weekEnd.getUTCDate() + 4);
-
   const formatter = new Intl.DateTimeFormat('en-US', {
     timeZone: TIME_ZONE,
     month: 'short',
     day: 'numeric',
   });
-
   return `${formatter.format(weekStart)} - ${formatter.format(weekEnd)}`;
 }
 
-function formatCardDate(date: Date): string {
+function formatCardDate(date: Date) {
   return new Intl.DateTimeFormat('en-US', {
     timeZone: TIME_ZONE,
     month: 'short',
@@ -71,239 +79,162 @@ function formatCardDate(date: Date): string {
   }).format(date);
 }
 
-function toYmdString(date: Date): string {
+function toYmdString(date: Date) {
   const { year, month, day } = getManilaDateParts(date);
   return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
-function toComparableNumber(date: Date): number {
+function toComparableNumber(date: Date) {
   const { year, month, day } = getManilaDateParts(date);
   return year * 10000 + month * 100 + day;
 }
 
-function getManilaHour(date: Date): number {
-  const formatter = new Intl.DateTimeFormat('en-US', {
-    timeZone: TIME_ZONE,
-    hour: '2-digit',
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(date);
-  return Number(parts.find((part) => part.type === 'hour')?.value ?? '0');
-}
-
-function parseManilaDateTime(value: string): Date | null {
-  if (!value) {
-    return null;
-  }
-
-  const [datePart, timePart] = value.split('T');
-  if (!datePart || !timePart) {
-    return null;
-  }
-
-  const [year, month, day] = datePart.split('-').map(Number);
-  const [hour, minute] = timePart.split(':').map(Number);
-
-  if (!year || !month || !day || Number.isNaN(hour) || Number.isNaN(minute)) {
-    return null;
-  }
-
-  return new Date(Date.UTC(year, month - 1, day, hour - MANILA_OFFSET_HOURS, minute));
-}
-
-function isWorkingDay(date: Date): boolean {
-  const weekday = date.getUTCDay();
-  const isWeekday = weekday >= 1 && weekday <= 5;
-  const holiday = HOLIDAYS[toYmdString(date)];
-  return isWeekday && !holiday;
-}
-
-function countWorkingDaysSinceAnchor(anchor: Date, target: Date): number {
-  let count = 0;
-  const cursor = new Date(anchor);
-
-  while (cursor < target) {
-    if (isWorkingDay(cursor)) {
-      count += 1;
-    }
-    cursor.setUTCDate(cursor.getUTCDate() + 1);
-  }
-
-  return count;
-}
-
-function buildWeekAssignments(weekStart: Date, startIndex: number): DayAssignment[] {
-  const assignments: DayAssignment[] = [];
-  let rotationIndex = startIndex;
-
-  for (let i = 0; i < WEEKDAYS.length; i += 1) {
-    const dayDate = new Date(weekStart);
-    dayDate.setUTCDate(dayDate.getUTCDate() + i);
-    const key = toYmdString(dayDate);
-    const isHoliday = Boolean(HOLIDAYS[key]);
-    const cleaner = isHoliday ? null : ROTATION[rotationIndex % ROTATION.length];
-
-    if (!isHoliday) {
-      rotationIndex += 1;
-    }
-
-    assignments.push({
-      date: dayDate,
-      weekday: WEEKDAYS[i],
-      cleaner,
-      isHoliday,
-      key,
-    });
-  }
-
-  return assignments;
-}
-
+// --- MAIN COMPONENT ---
 export default function Home() {
-  const [now, setNow] = useState(() => new Date());
-  const [assignments, setAssignments] = useState<DayAssignment[]>([]);
+  const [now, setNow] = useState<Date | null>(null);
+  const [viewDate, setViewDate] = useState<Date>(new Date());
   const [confirmations, setConfirmations] = useState<Record<string, Confirmation>>({});
-  const [scores, setScores] = useState<Record<string, number>>({});
-  const [simulatedNow, setSimulatedNow] = useState('');
   const [substitutes, setSubstitutes] = useState<Record<string, string>>({});
 
+  // 1. Clock Tick
   useEffect(() => {
-    const interval = setInterval(() => setNow(new Date()), 60 * 1000);
+    setNow(new Date()); 
+    const interval = setInterval(() => setNow(new Date()), 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const effectiveNow = useMemo(() => {
-    const parsed = parseManilaDateTime(simulatedNow);
-    return parsed ?? now;
-  }, [now, simulatedNow]);
-
-  const weekStart = useMemo(() => getManilaWeekStart(effectiveNow), [effectiveNow]);
-  const workingDaysSinceAnchor = useMemo(
-    () => countWorkingDaysSinceAnchor(new Date(ANCHOR_WEEK_START), weekStart),
-    [weekStart]
-  );
-  const rotationStartIndex = useMemo(
-    () => (ANCHOR_START_INDEX + workingDaysSinceAnchor) % ROTATION.length,
-    [workingDaysSinceAnchor]
-  );
-  const baseAssignments = useMemo(
-    () => buildWeekAssignments(weekStart, rotationStartIndex),
-    [weekStart, rotationStartIndex]
-  );
-  const dateRange = useMemo(() => formatDateRange(weekStart), [weekStart]);
-  const todayComparable = useMemo(() => toComparableNumber(effectiveNow), [effectiveNow]);
-  const manilaHour = useMemo(() => getManilaHour(effectiveNow), [effectiveNow]);
-
+  // 2. DATABASE: Load Data
   useEffect(() => {
-    setAssignments(baseAssignments);
-  }, [baseAssignments]);
+    const fetchConfirmations = async () => {
+      const { data, error } = await supabase.from('confirmations').select('*');
+      if (error) {
+        console.error('Error loading data:', error);
+        return;
+      }
+      
+      const map: Record<string, Confirmation> = {};
+      data?.forEach((row: any) => {
+        map[row.date_key] = {
+          status: row.status,
+          cleanedBy: row.cleaned_by,
+        };
+      });
+      setConfirmations(map);
+    };
 
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
+    fetchConfirmations();
 
-    const storedScores = window.localStorage.getItem('cleanerScores');
-    const storedConfirmations = window.localStorage.getItem('cleanerConfirmations');
+    const channel = supabase
+      .channel('schema-db-changes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'confirmations' },
+        () => fetchConfirmations()
+      )
+      .subscribe();
 
-    if (storedScores) {
-      setScores(JSON.parse(storedScores) as Record<string, number>);
-    } else {
-      setScores(
-        ROTATION.reduce((acc, name) => {
-          acc[name] = 0;
-          return acc;
-        }, {} as Record<string, number>)
-      );
-    }
-
-    if (storedConfirmations) {
-      setConfirmations(JSON.parse(storedConfirmations) as Record<string, Confirmation>);
-    }
+    return () => {
+      supabase.removeChannel(channel);
+    };
   }, []);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
+  // --- DERIVED STATE ---
+  const weekStart = useMemo(() => getManilaWeekStart(viewDate), [viewDate]);
+  const dateRange = useMemo(() => formatDateRange(weekStart), [weekStart]);
+  
+  const todayDate = now || new Date();
+  const todayComparable = useMemo(() => toComparableNumber(todayDate), [todayDate]);
+  const timeString = useMemo(() => {
+    if (!now) return '--:--:--';
+    return new Intl.DateTimeFormat('en-US', {
+      timeZone: TIME_ZONE,
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }).format(now);
+  }, [now]);
 
-    window.localStorage.setItem('cleanerScores', JSON.stringify(scores));
-  }, [scores]);
+  // --- 🔥 THE "FAIRNESS" ENGINE 🔥 ---
+  const adjustedAssignments = useMemo(() => {
+    const assignments: DayAssignment[] = [];
+    let cursor = new Date(ANCHOR_WEEK_START);
+    const targetEnd = new Date(weekStart);
+    targetEnd.setUTCDate(targetEnd.getUTCDate() + 5); 
 
-  useEffect(() => {
-    if (typeof window === 'undefined') {
-      return;
-    }
+    let rotationIndex = ANCHOR_START_INDEX;
+    const debtLedger: Record<string, string[]> = {};
 
-    window.localStorage.setItem('cleanerConfirmations', JSON.stringify(confirmations));
-  }, [confirmations]);
+    while (cursor <= targetEnd) {
+      const key = toYmdString(cursor);
+      const holidayName = HOLIDAYS[key];
+      const isHoliday = Boolean(holidayName);
+      const weekdayVal = cursor.getUTCDay();
+      const isWeekday = weekdayVal >= 1 && weekdayVal <= 5;
 
-  const handleConfirmation = (key: string, didClean: boolean, cleanedBy?: string) => {
-    const assignedCleaner = assignments.find((day) => day.key === key)?.cleaner ?? undefined;
-    const resolvedCleaner = didClean ? cleanedBy ?? assignedCleaner : cleanedBy;
+      let displayCleaner = null;
+      let statusLabel = null;
 
-    setConfirmations((previous) => {
-      if (previous[key]) {
-        return previous;
+      if (isWeekday && !isHoliday) {
+        const mathCleaner = ROTATION[rotationIndex % ROTATION.length];
+        rotationIndex++; 
+        
+        let plannedCleaner = mathCleaner;
+        let isPaybackShift = false;
+        let payingBackWho = '';
+
+        if (debtLedger[mathCleaner] && debtLedger[mathCleaner].length > 0) {
+           const debtor = debtLedger[mathCleaner].shift(); 
+           if (debtor) {
+             plannedCleaner = debtor;
+             isPaybackShift = true;
+             payingBackWho = mathCleaner;
+           }
+        }
+
+        const confirmation = confirmations[key];
+        const actualCleaner = confirmation?.cleanedBy ?? plannedCleaner;
+
+        displayCleaner = actualCleaner;
+
+        if (confirmation?.cleanedBy && confirmation.cleanedBy !== plannedCleaner) {
+            statusLabel = `Subbed for ${plannedCleaner}`;
+            if (!debtLedger[actualCleaner]) debtLedger[actualCleaner] = [];
+            debtLedger[actualCleaner].push(plannedCleaner);
+        } else if (isPaybackShift) {
+            statusLabel = `Covering for ${payingBackWho}`;
+        }
       }
-      return {
-        ...previous,
-        [key]: {
-          status: didClean ? 'cleaned' : 'missed',
-          cleanedBy: resolvedCleaner,
-        },
-      };
+
+      if (cursor >= weekStart && cursor < targetEnd && isWeekday) {
+        assignments.push({
+          date: new Date(cursor),
+          weekday: WEEKDAYS[weekdayVal - 1],
+          displayCleaner,
+          statusLabel,
+          isHoliday,
+          holidayName,
+          key
+        });
+      }
+
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    return assignments;
+  }, [weekStart, confirmations]);
+
+  // --- SCORING ---
+  const scores = useMemo(() => {
+    const calculated: Record<string, number> = {};
+    ROTATION.forEach(name => { calculated[name] = 0; });
+    Object.values(confirmations).forEach((conf) => {
+      if (conf.status === 'cleaned' && conf.cleanedBy) {
+        calculated[conf.cleanedBy] = (calculated[conf.cleanedBy] || 0) + 1;
+      }
     });
-
-    if (didClean) {
-      if (resolvedCleaner) {
-        setScores((previous) => ({
-          ...previous,
-          [resolvedCleaner]: (previous[resolvedCleaner] ?? 0) + 1,
-        }));
-      }
-    }
-
-    if (!didClean) {
-      if (resolvedCleaner) {
-        setScores((previous) => ({
-          ...previous,
-          [resolvedCleaner]: (previous[resolvedCleaner] ?? 0) + 1,
-        }));
-      }
-
-      setAssignments((previous) => {
-        const currentIndex = previous.findIndex((day) => day.key === key);
-        if (currentIndex === -1) {
-          return previous;
-        }
-
-        const currentDay = previous[currentIndex];
-        if (!currentDay.cleaner) {
-          return previous;
-        }
-
-        let nextIndex = -1;
-        for (let i = currentIndex + 1; i < previous.length; i += 1) {
-          if (previous[i].cleaner) {
-            nextIndex = i;
-            break;
-          }
-        }
-
-        if (nextIndex === -1) {
-          return previous;
-        }
-
-        const updated = previous.map((day) => ({ ...day }));
-        const temp = updated[currentIndex].cleaner;
-        updated[currentIndex].cleaner = updated[nextIndex].cleaner;
-        updated[nextIndex].cleaner = temp;
-
-        return updated;
-      });
-    }
-  };
+    return calculated;
+  }, [confirmations]);
 
   const leaderboard = useMemo(() => {
     return ROTATION
@@ -311,190 +242,242 @@ export default function Home() {
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
   }, [scores]);
 
+  // --- HANDLERS ---
+  const handleConfirmation = async (key: string, status: 'cleaned' | 'missed' | null, cleanedBy?: string) => {
+    setConfirmations((prev) => {
+      const next = { ...prev };
+      if (status === null) {
+        delete next[key];
+      } else {
+        next[key] = { status, cleanedBy: status === 'cleaned' ? cleanedBy : undefined };
+      }
+      return next;
+    });
+
+    if (status === null) {
+      await supabase.from('confirmations').delete().eq('date_key', key);
+    } else {
+      await supabase.from('confirmations').upsert({
+        date_key: key,
+        status: status,
+        cleaned_by: status === 'cleaned' ? cleanedBy : null,
+      });
+    }
+  };
+
+  const changeWeek = (days: number) => {
+    const newDate = new Date(viewDate);
+    newDate.setUTCDate(newDate.getUTCDate() + days);
+    setViewDate(newDate);
+  };
+
+  const resetToToday = () => {
+    setViewDate(new Date());
+  };
+
   return (
-    <main className="min-h-screen p-8 bg-gradient-to-br from-blue-50 to-indigo-100">
-      <div className="max-w-3xl mx-auto">
-        <h1 className="text-4xl font-bold text-center mb-2 text-gray-800">
-          Cleaners This Week
-        </h1>
-        <p className="text-center text-gray-600 mb-8">
-          {dateRange} (Manila time)
-        </p>
-
-        {process.env.NODE_ENV !== 'production' && (
-          <div className="mb-6 bg-white rounded-xl shadow-lg p-6">
-            <h2 className="text-lg font-semibold text-gray-800 mb-3">
-              Test Time (Manila)
-            </h2>
-            <div className="flex flex-col sm:flex-row gap-3 items-start sm:items-center">
-              <input
-                type="datetime-local"
-                value={simulatedNow}
-                onChange={(event) => setSimulatedNow(event.target.value)}
-                className="border border-gray-300 rounded-lg px-3 py-2 text-sm"
-              />
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSimulatedNow('2026-02-16T16:00')}
-                  className="px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold"
-                >
-                  Mon 4 PM
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSimulatedNow('2026-02-16T18:00')}
-                  className="px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold"
-                >
-                  Mon 6 PM
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSimulatedNow('2026-02-23T10:00')}
-                  className="px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold"
-                >
-                  Next Monday
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSimulatedNow('')}
-                  className="px-3 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-semibold"
-                >
-                  Reset
-                </button>
-              </div>
-            </div>
-            <p className="mt-2 text-xs text-gray-500">
-              Simulates Manila time without changing your system clock.
-            </p>
+    <main className="min-h-screen p-4 sm:p-8 bg-gradient-to-br from-blue-50 to-indigo-100 relative">
+      <div className="max-w-3xl mx-auto relative">
+        
+        {/* --- LEADERBOARD WIDGET --- */}
+        {/* Wider (w-80), Pushed further right (right-[-350px]), No Scroll */}
+        <div className="mb-6 xl:absolute xl:top-0 xl:right-[-350px] w-full sm:w-80 bg-white rounded-xl shadow-lg border border-indigo-50 overflow-hidden z-10 transition-all">
+          <div className="bg-indigo-700 px-5 py-4">
+            <h3 className="text-base font-bold text-white uppercase tracking-wider flex items-center gap-2">
+              🏆 Leaderboard
+            </h3>
           </div>
-        )}
-
-        <div className="bg-white rounded-xl shadow-lg p-6">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {assignments.map((day) => {
-              const dayComparable = toComparableNumber(day.date);
-              const isPast = dayComparable < todayComparable;
-              const isToday = dayComparable === todayComparable;
-              const isHoliday = day.isHoliday;
-              const confirmation = confirmations[day.key];
-              const showConfirmation = isToday && manilaHour >= 17 && !isHoliday;
-              const showCleanerConfirm = isToday && !isHoliday && !confirmation;
-              const substitute = substitutes[day.key] ?? '';
-
-              const cardClassName = isPast
-                ? 'bg-gray-200 text-gray-500'
-                : isToday
-                  ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white ring-2 ring-amber-200'
-                  : isHoliday
-                    ? 'bg-slate-100 text-slate-500'
-                    : 'bg-gradient-to-br from-indigo-500 to-blue-600 text-white';
-
-              return (
-                <div
-                  key={day.key}
-                  className={`flex flex-col gap-3 p-4 rounded-lg shadow-md ${cardClassName}`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-semibold">{day.weekday}</div>
-                      <div className="text-xs opacity-80">{formatCardDate(day.date)}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-lg">
-                        {isHoliday ? 'Holiday' : day.cleaner}
-                      </div>
-                      {isHoliday && (
-                        <div className="text-xs opacity-80">No work</div>
-                      )}
-                    </div>
-                  </div>
-
-                  {confirmation && (
-                    <span className="text-xs font-semibold uppercase tracking-wide">
-                      {confirmation.status === 'cleaned'
-                        ? `Confirmed${confirmation.cleanedBy ? ` (${confirmation.cleanedBy})` : ''}`
-                        : `Not cleaned${confirmation.cleanedBy ? ` (cleaned by ${confirmation.cleanedBy})` : ''}`}
-                    </span>
-                  )}
-
-                  {showCleanerConfirm && (
-                    <button
-                      type="button"
-                      onClick={() => handleConfirmation(day.key, true, day.cleaner ?? undefined)}
-                      className="px-3 py-1 rounded-full bg-white/90 text-gray-800 text-xs font-semibold"
-                    >
-                      Cleaner: I cleaned
-                    </button>
-                  )}
-
-                  {showConfirmation && !confirmation && (
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex flex-col gap-2">
-                        <select
-                          value={substitute}
-                          onChange={(event) =>
-                            setSubstitutes((previous) => ({
-                              ...previous,
-                              [day.key]: event.target.value,
-                            }))
-                          }
-                          className="px-2 py-1 rounded-md text-xs text-gray-800"
-                        >
-                          <option value="">Select who cleaned</option>
-                          {ROTATION.map((name) => (
-                            <option key={name} value={name}>
-                              {name}
-                            </option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmation(day.key, true, day.cleaner ?? undefined)}
-                          className="px-3 py-1 rounded-full bg-white/90 text-gray-800 text-xs font-semibold"
-                        >
-                          Confirmed
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleConfirmation(day.key, false, substitute || undefined)}
-                          disabled={!substitute}
-                          className="px-3 py-1 rounded-full bg-white/90 text-gray-800 text-xs font-semibold"
-                        >
-                          Not cleaned
-                        </button>
-                      </div>
-                      <span className="text-[11px] opacity-80">Visible after 5 PM</span>
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="mt-6 bg-white rounded-xl shadow-lg p-6">
-          <h2 className="text-lg font-semibold text-gray-800 mb-4">
-            All-Time Leaderboard
-          </h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          {/* Removed max-h and overflow-y-auto to show all items */}
+          <div className="divide-y divide-gray-100 bg-white/50 backdrop-blur-sm">
             {leaderboard.map((entry, index) => (
-              <div
-                key={entry.name}
-                className="flex items-center justify-between bg-gray-50 rounded-lg px-4 py-3"
-              >
+              <div key={entry.name} className="flex justify-between items-center px-5 py-3 hover:bg-indigo-50/50 transition-colors">
                 <div className="flex items-center gap-3">
-                  <span className="text-xs font-semibold text-gray-500">#{index + 1}</span>
-                  <span className="font-semibold text-gray-800">{entry.name}</span>
+                  <span className={`text-xs font-bold w-6 h-6 flex items-center justify-center rounded-full shadow-sm ${
+                    index === 0 ? 'bg-amber-400 text-white ring-2 ring-amber-200' : 
+                    index === 1 ? 'bg-slate-300 text-slate-700' : 
+                    index === 2 ? 'bg-orange-200 text-orange-800' : 
+                    'text-gray-400 bg-gray-100'
+                  }`}>
+                    {index + 1}
+                  </span>
+                  <span className={`text-base ${index === 0 ? 'font-bold text-gray-900' : 'font-medium text-gray-600'}`}>
+                    {entry.name}
+                  </span>
                 </div>
-                <span className="text-sm font-semibold text-gray-700">{entry.score}</span>
+                <span className="font-bold text-xl text-indigo-600">{entry.score}</span>
               </div>
             ))}
           </div>
         </div>
 
-        <div className="mt-6 text-center text-sm text-gray-600">
-          Rotation order: {ROTATION.join(', ')}
+        {/* --- MAIN HEADER --- */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 mt-2 pb-6 border-b border-indigo-200/50">
+           <div>
+             <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-800 tracking-tight">
+               Cleaners Schedule
+             </h1>
+             <p className="text-indigo-600 font-medium mt-1">
+               {dateRange}
+             </p>
+           </div>
+
+           <div className="flex flex-col md:items-end gap-3">
+             <div className="font-mono text-3xl font-bold text-gray-700 tabular-nums tracking-tight">
+               {timeString}
+             </div>
+             
+             <div className="flex items-center bg-white rounded-lg shadow-sm border border-gray-200 p-1">
+                <button 
+                  onClick={() => changeWeek(-7)}
+                  className="p-2 hover:bg-gray-100 rounded text-gray-600 transition-colors"
+                  aria-label="Previous Week"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                </button>
+                <button 
+                  onClick={resetToToday}
+                  className="px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-600 hover:bg-indigo-50 rounded mx-1"
+                >
+                  Today
+                </button>
+                <button 
+                  onClick={() => changeWeek(7)}
+                  className="p-2 hover:bg-gray-100 rounded text-gray-600 transition-colors"
+                  aria-label="Next Week"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                </button>
+             </div>
+           </div>
+        </div>
+
+        {/* --- CARD GRID --- */}
+        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-xl p-4 sm:p-6 border border-white">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            {adjustedAssignments.map((day) => {
+              const dayComparable = toComparableNumber(day.date);
+              const isPast = dayComparable < todayComparable;
+              const isToday = dayComparable === todayComparable;
+              const isFuture = dayComparable > todayComparable;
+              const isHoliday = day.isHoliday;
+              
+              const confirmation = confirmations[day.key];
+              const substitute = substitutes[day.key] ?? '';
+              const canEdit = (isToday || isPast) && !isHoliday;
+              
+              const cardClassName = isPast
+                ? 'bg-gray-50 text-gray-500 border border-gray-200'
+                : isToday
+                  ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white ring-4 ring-amber-100 shadow-lg transform scale-[1.02]'
+                  : isHoliday
+                    ? 'bg-slate-50 text-slate-400 border border-slate-100'
+                    : 'bg-white border border-indigo-100 text-gray-700 shadow-sm hover:border-indigo-300';
+
+              return (
+                <div key={day.key} className={`flex flex-col gap-3 p-5 rounded-xl transition-all ${cardClassName}`}>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="font-bold text-xl">{day.weekday}</div>
+                      <div className={`text-xs font-medium ${isToday ? 'text-white/90' : 'text-gray-400'}`}>
+                        {formatCardDate(day.date)}
+                      </div>
+                    </div>
+                    <div className="text-right">
+                      <div className="text-2xl font-bold">
+                        {isHoliday ? '🎉' : day.displayCleaner}
+                      </div>
+                      {!isHoliday && day.statusLabel && (
+                        <div className="text-[10px] uppercase font-bold bg-black/10 px-2 py-0.5 rounded-full mt-1 inline-block">
+                           {day.statusLabel}
+                        </div>
+                      )}
+                      {isHoliday && <div className="text-xs font-medium">{day.holidayName || 'Holiday'}</div>}
+                    </div>
+                  </div>
+
+                  <div className={`mt-2 pt-3 border-t ${isToday ? 'border-white/20' : 'border-gray-200'}`}>
+                    {isFuture && !isHoliday && (
+                      <div className="text-xs italic opacity-60 text-center py-2">
+                        Upcoming shift
+                      </div>
+                    )}
+
+                    {confirmation ? (
+                      <div className="flex flex-col gap-2">
+                        <div className={`p-2 rounded-lg flex justify-between items-center ${isToday ? 'bg-white/20' : 'bg-gray-200'}`}>
+                          <span className="font-bold text-sm">
+                            {confirmation.status === 'cleaned' ? '✅ Cleaned' : '❌ Missed'}
+                          </span>
+                          {confirmation.cleanedBy && (
+                            <span className="text-xs font-medium opacity-80">
+                               by {confirmation.cleanedBy}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleConfirmation(day.key, null)}
+                          className={`text-xs underline text-left hover:opacity-100 opacity-70 ${isToday ? 'text-white' : 'text-gray-500'}`}
+                        >
+                          Undo / Edit
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="space-y-3">
+                        {canEdit && !confirmation && (
+                          <button
+                            type="button"
+                            onClick={() => handleConfirmation(day.key, 'cleaned', day.displayCleaner ?? undefined)}
+                            className="w-full py-3 px-4 rounded-lg bg-white/90 text-orange-600 text-sm font-bold shadow-sm hover:bg-white hover:scale-[1.02] transition-all"
+                          >
+                            Confirm {day.displayCleaner}
+                          </button>
+                        )}
+
+                        {canEdit && (
+                          <div className={`flex flex-col gap-2 p-3 rounded-lg ${isToday ? 'bg-black/10' : 'bg-gray-50'}`}>
+                            <span className="text-[10px] font-bold uppercase tracking-wider opacity-70">
+                              Substitute / Admin
+                            </span>
+                            <div className="flex gap-2">
+                               <select
+                                value={substitute}
+                                onChange={(e) => setSubstitutes((prev) => ({ ...prev, [day.key]: e.target.value }))}
+                                className="flex-1 px-2 py-1 rounded text-xs text-gray-800 border-0 focus:ring-2 focus:ring-indigo-500"
+                              >
+                                <option value="">Select sub...</option>
+                                {ROTATION.map((name) => (
+                                  <option key={name} value={name}>{name}</option>
+                                ))}
+                              </select>
+                              <button
+                                type="button"
+                                disabled={!substitute}
+                                onClick={() => handleConfirmation(day.key, 'cleaned', substitute)}
+                                className="px-3 py-1 rounded bg-indigo-600 text-white text-xs font-bold disabled:opacity-50 hover:bg-indigo-700"
+                              >
+                                Save
+                              </button>
+                            </div>
+                            <button
+                                type="button"
+                                onClick={() => handleConfirmation(day.key, 'missed')}
+                                className="w-full text-center text-[10px] font-bold uppercase tracking-wider opacity-60 hover:opacity-100 hover:text-red-500 transition-all mt-1"
+                              >
+                                Mark as Missed
+                              </button>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        
+        <div className="mt-8 text-center text-xs text-gray-400 font-mono">
+           Rotation: {ROTATION.join(' → ')}
         </div>
       </div>
     </main>

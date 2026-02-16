@@ -1,4 +1,4 @@
-// File: /Users/james/Documents/code/nueca/cleaners/cleaner-schedule/app/page.tsx
+// File: C:\Users\thefe\OneDrive\Documents\Cleaner\cleaner-schedule\app\page.tsx
 import * as entry from '../../../app/page.js'
 import type { ResolvingMetadata, ResolvingViewport } from 'next/dist/lib/metadata/types/metadata-interface.js'
 
