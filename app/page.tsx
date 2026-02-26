@@ -162,7 +162,6 @@ export default function Home() {
     targetEnd.setUTCDate(targetEnd.getUTCDate() + 5); 
 
     let rotationIndex = ANCHOR_START_INDEX;
-    const debtLedger: Record<string, string[]> = {};
 
     while (cursor <= targetEnd) {
       const key = toYmdString(cursor);
@@ -177,32 +176,22 @@ export default function Home() {
       let statusLabel = null;
 
       if (isWeekday && !isHoliday) {
-        const mathCleaner = ROTATION[rotationIndex % ROTATION.length];
+        const plannedCleaner = ROTATION[rotationIndex % ROTATION.length];
         rotationIndex++; 
         
-        let plannedCleaner = mathCleaner;
-        let isPaybackShift = false;
-        let payingBackWho = '';
-
-        if (debtLedger[mathCleaner] && debtLedger[mathCleaner].length > 0) {
-           const debtor = debtLedger[mathCleaner].shift(); 
-           if (debtor) {
-             plannedCleaner = debtor;
-             isPaybackShift = true;
-             payingBackWho = mathCleaner;
-           }
-        }
-
         const actualCleaner = confirmation?.cleanedBy ?? plannedCleaner;
         displayCleaner = actualCleaner;
 
-        // Triggers the Covering logic
-        if (confirmation?.cleanedBy && confirmation.cleanedBy !== plannedCleaner) {
+        // Triggers the Covering logic (Simplified: No Debt Ledger)
+        if (confirmation?.cleanedBy === 'All') {
+            statusLabel = `Group Sub for ${plannedCleaner}`;
+            
+            // Pause the rotation! The person who was subbed out is pushed to the next day.
+            rotationIndex--;
+
+        } else if (confirmation?.cleanedBy && confirmation.cleanedBy !== plannedCleaner) {
+            // Normal subbing: Point goes to the sub, schedule continues normally tomorrow.
             statusLabel = `Subbed for ${plannedCleaner}`;
-            if (!debtLedger[actualCleaner]) debtLedger[actualCleaner] = [];
-            debtLedger[actualCleaner].push(plannedCleaner);
-        } else if (isPaybackShift) {
-            statusLabel = `Covering for ${payingBackWho}`;
         }
       }
 
@@ -224,13 +213,20 @@ export default function Home() {
     return assignments;
   }, [weekStart, confirmations]);
 
-  // --- SCORING ---
+// --- SCORING ---
   const scores = useMemo(() => {
     const calculated: Record<string, number> = {};
     ROTATION.forEach(name => { calculated[name] = 0; });
+    
     Object.values(confirmations).forEach((conf) => {
-      if (conf.status === 'cleaned' && conf.cleanedBy) {
-        calculated[conf.cleanedBy] = (calculated[conf.cleanedBy] || 0) + 1;
+      if ((conf.status === 'cleaned' || conf.status === 'subbed') && conf.cleanedBy) {
+        if (conf.cleanedBy === 'All') {
+          ROTATION.forEach(name => {
+            calculated[name] += 1;
+          });
+        } else {
+          calculated[conf.cleanedBy] = (calculated[conf.cleanedBy] || 0) + 1;
+        }
       }
     });
     return calculated;
@@ -286,11 +282,235 @@ export default function Home() {
   };
 
   return (
-    <main className="min-h-screen p-4 sm:p-8 bg-gradient-to-br from-blue-50 to-indigo-100 relative">
-      <div className="max-w-3xl mx-auto relative">
+    <main className="min-h-screen p-4 sm:p-8 bg-gradient-to-br from-blue-50 to-indigo-100 flex justify-center">
+      <div className="w-full max-w-[1600px] flex flex-col xl:flex-row gap-8 items-start">
         
-        {/* --- LEADERBOARD WIDGET --- */}
-        <div className="mb-6 xl:absolute xl:top-0 xl:right-[-350px] w-full sm:w-80 bg-white rounded-xl shadow-lg border border-indigo-50 overflow-hidden z-10 transition-all">
+        {/* --- MAIN LEFT CONTENT --- */}
+        <div className="flex-1 min-w-0 w-full">
+          
+          {/* --- MAIN HEADER --- */}
+          <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 pb-6 border-b border-indigo-200/50">
+             <div>
+               <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-800 tracking-tight">
+                 Cleaners Schedule
+               </h1>
+               <p className="text-indigo-600 font-medium mt-1">
+                 {dateRange}
+               </p>
+             </div>
+
+             <div className="flex flex-col md:items-end gap-3">
+               <div className="font-mono text-3xl font-bold text-gray-700 tabular-nums tracking-tight">
+                 {timeString}
+               </div>
+               
+               <div className="flex items-center bg-white rounded-lg shadow-sm border border-gray-200 p-1">
+                  <button 
+                    onClick={() => changeWeek(-7)}
+                    className="p-2 hover:bg-gray-100 rounded text-gray-600 transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
+                  </button>
+                  <button 
+                    onClick={resetToToday}
+                    className="px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-600 hover:bg-indigo-50 rounded mx-1"
+                  >
+                    Today
+                  </button>
+                  <button 
+                    onClick={() => changeWeek(7)}
+                    className="p-2 hover:bg-gray-100 rounded text-gray-600 transition-colors"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
+                  </button>
+               </div>
+             </div>
+          </div>
+
+          {/* --- CARD GRID --- */}
+          <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-xl p-4 sm:p-6 border border-white">
+            <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+              {adjustedAssignments.map((day) => {
+                const dayComparable = toComparableNumber(day.date);
+                const isPast = dayComparable < todayComparable;
+                const isToday = dayComparable === todayComparable;
+                const isFuture = dayComparable > todayComparable;
+                
+                const confirmation = confirmations[day.key];
+                
+                // Status Booleans
+                const isCleaned = confirmation?.status === 'cleaned';
+                const isMissed = confirmation?.status === 'missed';
+                const isHoliday = confirmation?.status === 'holiday';
+                const isSubbed = confirmation?.status === 'subbed';
+                const isFinalized = isCleaned || isMissed || isHoliday;
+                
+                const substitute = substitutes[day.key] ?? '';
+                const holidayInput = holidayInputs[day.key] ?? '';
+                const canConfirm = isToday || isPast;
+                
+                const cardClassName = isPast
+                  ? 'bg-gray-50 text-gray-500 border border-gray-200'
+                  : isToday
+                    ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white ring-4 ring-amber-100 shadow-lg transform scale-[1.02] z-10 relative'
+                    : isHoliday
+                      ? 'bg-slate-50 text-slate-400 border border-slate-100'
+                      : 'bg-white border border-indigo-100 text-gray-700 shadow-sm hover:border-indigo-300';
+
+                return (
+                  <div key={day.key} className={`flex flex-col gap-3 p-4 rounded-xl transition-all ${cardClassName}`}>
+                    <div className="flex flex-col sm:flex-row xl:flex-col items-start sm:items-center xl:items-start justify-between gap-1">
+                      <div>
+                        <div className="font-bold text-lg leading-tight">{day.weekday}</div>
+                        <div className={`text-xs font-medium ${isToday ? 'text-white/90' : 'text-gray-400'}`}>
+                          {formatCardDate(day.date)}
+                        </div>
+                      </div>
+                      <div className="text-left sm:text-right xl:text-left">
+                        <div className="text-xl font-bold">
+                          {isHoliday ? '🎉' : day.displayCleaner}
+                        </div>
+                        {!isHoliday && day.statusLabel && (
+                          <div className="text-[10px] uppercase font-bold bg-black/10 px-2 py-0.5 rounded-full mt-1 inline-block">
+                             {day.statusLabel}
+                          </div>
+                        )}
+                        {isHoliday && <div className="text-xs font-medium">{day.holidayName || 'Holiday'}</div>}
+                      </div>
+                    </div>
+
+                    <div className={`mt-auto pt-3 border-t ${isToday ? 'border-white/20' : 'border-gray-200'}`}>
+                      {isFuture && !isFinalized && !isSubbed && (
+                        <div className="text-xs italic opacity-60 text-center py-2">
+                          Upcoming shift
+                        </div>
+                      )}
+
+                      {isFinalized ? (
+                        <div className="flex flex-col gap-2">
+                          <div className={`p-2 rounded-lg flex flex-col gap-1 ${isToday ? 'bg-white/20' : 'bg-gray-200'}`}>
+                            <span className="font-bold text-sm">
+                              {isCleaned ? '✅ Cleaned' : isMissed ? '❌ Missed' : '🎉 Holiday'}
+                            </span>
+                            {isCleaned && confirmation.cleanedBy && (
+                              <span className="text-xs font-medium opacity-80">
+                                 by {confirmation.cleanedBy === 'All' ? 'Everyone' : confirmation.cleanedBy}
+                              </span>
+                            )}
+                            {isHoliday && confirmation.holidayName && (
+                              <span className="text-xs font-medium opacity-80">
+                                 {confirmation.holidayName}
+                              </span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => handleConfirmation(day.key, null)}
+                            className={`text-[10px] underline text-left hover:opacity-100 opacity-70 ${isToday ? 'text-white' : 'text-gray-500'}`}
+                          >
+                            Undo / Edit
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="space-y-3">
+                          
+                          {/* 1. ACTUAL CONFIRMATION */}
+                          {canConfirm && (
+                            <div className={`p-2 rounded-lg flex flex-col gap-2 ${isToday ? 'bg-black/10' : 'bg-white border border-gray-200 shadow-sm'}`}>
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmation(day.key, 'cleaned', day.displayCleaner ?? undefined)}
+                                className="w-full py-2 px-2 rounded bg-green-500 text-white text-[11px] font-bold shadow-sm hover:bg-green-600 transition-all leading-tight"
+                              >
+                                ✅ Confirm {day.displayCleaner === 'All' ? 'Everyone' : day.displayCleaner}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmation(day.key, 'missed')}
+                                className="w-full py-1 text-[10px] font-bold text-gray-500 hover:text-red-500 transition-all"
+                              >
+                                ❌ Mark Missed
+                              </button>
+                            </div>
+                          )}
+
+                          {/* 2. SCHEDULE SUBSTITUTE WIDGET */}
+                          <div className={`p-2 rounded-lg border ${isToday ? 'bg-indigo-900/10 border-indigo-200/30' : 'bg-indigo-50 border-indigo-100'}`}>
+                            <div className={`text-[9px] font-bold uppercase mb-1.5 ${isToday ? 'text-indigo-100' : 'text-indigo-800'}`}>
+                                🔄 Substitute
+                            </div>
+                            {isSubbed ? (
+                               <div className="flex flex-col gap-1 bg-white/60 p-1.5 rounded">
+                                 <span className="text-[10px] font-bold text-indigo-700 truncate">Sub: {confirmation.cleanedBy === 'All' ? 'Everyone' : confirmation.cleanedBy}</span>
+                                 <button onClick={() => handleConfirmation(day.key, null)} className="text-[9px] text-left text-red-500 font-bold hover:underline">Cancel</button>
+                               </div>
+                            ) : (
+                               <div className="flex flex-col gap-1.5">
+                                 <select
+                                  value={substitute}
+                                  onChange={(e) => setSubstitutes((prev) => ({ ...prev, [day.key]: e.target.value }))}
+                                  className="w-full px-1.5 py-1 rounded text-[11px] text-gray-800 border-gray-200 focus:ring-2 focus:ring-indigo-500"
+                                 >
+                                   <option value="">Select sub...</option>
+                                   <option value="All">All (Everyone)</option>
+                                   {ROTATION.map((name) => (
+                                     <option key={name} value={name}>{name}</option>
+                                   ))}
+                                 </select>
+                                 <button
+                                   type="button"
+                                   disabled={!substitute}
+                                   onClick={() => {
+                                      // 🔥 THE FIX: Instantly confirm as 'cleaned' no matter who is selected
+                                      handleConfirmation(day.key, 'cleaned', substitute);
+                                   }}
+                                   className="w-full py-1 rounded bg-indigo-600 text-white text-[10px] font-bold disabled:opacity-50 hover:bg-indigo-700"
+                                 >
+                                   Set Sub
+                                 </button>
+                               </div>
+                            )}
+                          </div>
+
+                          {/* 3. MARK HOLIDAY WIDGET */}
+                          <div className={`p-2 rounded-lg border ${isToday ? 'bg-orange-900/10 border-orange-200/30' : 'bg-orange-50 border-orange-100'}`}>
+                            <div className={`text-[9px] font-bold uppercase mb-1.5 ${isToday ? 'text-orange-100' : 'text-orange-800'}`}>
+                                🌴 Holiday
+                            </div>
+                            <div className="flex flex-col gap-1.5">
+                              <input
+                                type="text"
+                                placeholder="Reason..."
+                                value={holidayInput}
+                                onChange={(e) => setHolidayInputs((prev) => ({ ...prev, [day.key]: e.target.value }))}
+                                className="w-full px-1.5 py-1 rounded text-[11px] text-gray-800 border-gray-200 focus:ring-2 focus:ring-orange-500"
+                              />
+                              <button
+                                type="button"
+                                disabled={!holidayInput.trim()}
+                                onClick={() => handleConfirmation(day.key, 'holiday', undefined, holidayInput.trim())}
+                                className="w-full py-1 rounded bg-orange-500 text-white text-[10px] font-bold disabled:opacity-50 hover:bg-orange-600"
+                              >
+                                Set Holiday
+                              </button>
+                            </div>
+                          </div>
+
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          
+          <div className="mt-8 text-center text-xs text-gray-400 font-mono">
+             Rotation: {ROTATION.join(' → ')}
+          </div>
+        </div>
+
+        {/* --- RIGHT SIDEBAR (Leaderboard) --- */}
+        <div className="w-full xl:w-80 shrink-0 bg-white rounded-xl shadow-lg border border-indigo-50 overflow-hidden xl:sticky top-8 h-fit">
           <div className="bg-indigo-700 px-5 py-4">
             <h3 className="text-base font-bold text-white uppercase tracking-wider flex items-center gap-2">
               🏆 Leaderboard
@@ -318,221 +538,6 @@ export default function Home() {
           </div>
         </div>
 
-        {/* --- MAIN HEADER --- */}
-        <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-6 mt-2 pb-6 border-b border-indigo-200/50">
-           <div>
-             <h1 className="text-3xl sm:text-4xl font-extrabold text-gray-800 tracking-tight">
-               Cleaners Schedule
-             </h1>
-             <p className="text-indigo-600 font-medium mt-1">
-               {dateRange}
-             </p>
-           </div>
-
-           <div className="flex flex-col md:items-end gap-3">
-             <div className="font-mono text-3xl font-bold text-gray-700 tabular-nums tracking-tight">
-               {timeString}
-             </div>
-             
-             <div className="flex items-center bg-white rounded-lg shadow-sm border border-gray-200 p-1">
-                <button 
-                  onClick={() => changeWeek(-7)}
-                  className="p-2 hover:bg-gray-100 rounded text-gray-600 transition-colors"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m15 18-6-6 6-6"/></svg>
-                </button>
-                <button 
-                  onClick={resetToToday}
-                  className="px-3 py-1 text-xs font-bold uppercase tracking-wider text-indigo-600 hover:bg-indigo-50 rounded mx-1"
-                >
-                  Today
-                </button>
-                <button 
-                  onClick={() => changeWeek(7)}
-                  className="p-2 hover:bg-gray-100 rounded text-gray-600 transition-colors"
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="m9 18 6-6-6-6"/></svg>
-                </button>
-             </div>
-           </div>
-        </div>
-
-        {/* --- CARD GRID --- */}
-        <div className="bg-white/80 backdrop-blur-xl rounded-2xl shadow-xl p-4 sm:p-6 border border-white">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            {adjustedAssignments.map((day) => {
-              const dayComparable = toComparableNumber(day.date);
-              const isPast = dayComparable < todayComparable;
-              const isToday = dayComparable === todayComparable;
-              const isFuture = dayComparable > todayComparable;
-              
-              const confirmation = confirmations[day.key];
-              
-              // Status Booleans
-              const isCleaned = confirmation?.status === 'cleaned';
-              const isMissed = confirmation?.status === 'missed';
-              const isHoliday = confirmation?.status === 'holiday';
-              const isSubbed = confirmation?.status === 'subbed';
-              const isFinalized = isCleaned || isMissed || isHoliday;
-              
-              const substitute = substitutes[day.key] ?? '';
-              const holidayInput = holidayInputs[day.key] ?? '';
-              const canConfirm = isToday || isPast;
-              
-              const cardClassName = isPast
-                ? 'bg-gray-50 text-gray-500 border border-gray-200'
-                : isToday
-                  ? 'bg-gradient-to-br from-amber-400 to-orange-500 text-white ring-4 ring-amber-100 shadow-lg transform scale-[1.02]'
-                  : isHoliday
-                    ? 'bg-slate-50 text-slate-400 border border-slate-100'
-                    : 'bg-white border border-indigo-100 text-gray-700 shadow-sm hover:border-indigo-300';
-
-              return (
-                <div key={day.key} className={`flex flex-col gap-3 p-5 rounded-xl transition-all ${cardClassName}`}>
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <div className="font-bold text-xl">{day.weekday}</div>
-                      <div className={`text-xs font-medium ${isToday ? 'text-white/90' : 'text-gray-400'}`}>
-                        {formatCardDate(day.date)}
-                      </div>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-2xl font-bold">
-                        {isHoliday ? '🎉' : day.displayCleaner}
-                      </div>
-                      {!isHoliday && day.statusLabel && (
-                        <div className="text-[10px] uppercase font-bold bg-black/10 px-2 py-0.5 rounded-full mt-1 inline-block">
-                           {day.statusLabel}
-                        </div>
-                      )}
-                      {isHoliday && <div className="text-xs font-medium">{day.holidayName || 'Holiday'}</div>}
-                    </div>
-                  </div>
-
-                  <div className={`mt-2 pt-3 border-t ${isToday ? 'border-white/20' : 'border-gray-200'}`}>
-                    {isFuture && !isFinalized && !isSubbed && (
-                      <div className="text-xs italic opacity-60 text-center py-2">
-                        Upcoming shift
-                      </div>
-                    )}
-
-                    {isFinalized ? (
-                      <div className="flex flex-col gap-2">
-                        <div className={`p-2 rounded-lg flex justify-between items-center ${isToday ? 'bg-white/20' : 'bg-gray-200'}`}>
-                          <span className="font-bold text-sm">
-                            {isCleaned ? '✅ Cleaned' : isMissed ? '❌ Missed' : '🎉 Holiday'}
-                          </span>
-                          {isCleaned && confirmation.cleanedBy && (
-                            <span className="text-xs font-medium opacity-80">
-                               by {confirmation.cleanedBy}
-                            </span>
-                          )}
-                          {isHoliday && confirmation.holidayName && (
-                            <span className="text-xs font-medium opacity-80">
-                               {confirmation.holidayName}
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          onClick={() => handleConfirmation(day.key, null)}
-                          className={`text-xs underline text-left hover:opacity-100 opacity-70 ${isToday ? 'text-white' : 'text-gray-500'}`}
-                        >
-                          Undo / Edit
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-3">
-                        
-                        {/* 1. ACTUAL CONFIRMATION (Only for Past & Present) */}
-                        {canConfirm && (
-                          <div className={`p-3 rounded-lg flex flex-col gap-2 ${isToday ? 'bg-black/10' : 'bg-white border border-gray-200 shadow-sm'}`}>
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmation(day.key, 'cleaned', day.displayCleaner ?? undefined)}
-                              className="w-full py-2 px-4 rounded bg-green-500 text-white text-sm font-bold shadow-sm hover:bg-green-600 transition-all"
-                            >
-                              ✅ Confirm {day.displayCleaner} Cleaned
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleConfirmation(day.key, 'missed')}
-                              className="w-full py-1 text-xs font-bold text-gray-500 hover:text-red-500 transition-all"
-                            >
-                              ❌ Mark as Missed
-                            </button>
-                          </div>
-                        )}
-
-                        {/* 2. SCHEDULE SUBSTITUTE WIDGET */}
-                        <div className={`p-3 rounded-lg border ${isToday ? 'bg-indigo-900/10 border-indigo-200/30' : 'bg-indigo-50 border-indigo-100'}`}>
-                          <div className={`text-[10px] font-bold uppercase mb-2 ${isToday ? 'text-indigo-100' : 'text-indigo-800'}`}>
-                             🔄 Schedule Substitute
-                          </div>
-                          {isSubbed ? (
-                             <div className="flex justify-between items-center bg-white/60 p-2 rounded">
-                                <span className="text-xs font-bold text-indigo-700">Sub: {confirmation.cleanedBy}</span>
-                                <button onClick={() => handleConfirmation(day.key, null)} className="text-[10px] text-red-500 font-bold hover:underline">Cancel Sub</button>
-                             </div>
-                          ) : (
-                             <div className="flex gap-2">
-                               <select
-                                value={substitute}
-                                onChange={(e) => setSubstitutes((prev) => ({ ...prev, [day.key]: e.target.value }))}
-                                className="flex-1 px-2 py-1.5 rounded text-xs text-gray-800 border-gray-200 focus:ring-2 focus:ring-indigo-500"
-                               >
-                                 <option value="">Select sub...</option>
-                                 {ROTATION.map((name) => (
-                                   <option key={name} value={name}>{name}</option>
-                                 ))}
-                               </select>
-                               <button
-                                 type="button"
-                                 disabled={!substitute}
-                                 onClick={() => handleConfirmation(day.key, 'subbed', substitute)}
-                                 className="px-3 py-1.5 rounded bg-indigo-600 text-white text-xs font-bold disabled:opacity-50 hover:bg-indigo-700"
-                               >
-                                 Set
-                               </button>
-                             </div>
-                          )}
-                        </div>
-
-                        {/* 3. MARK HOLIDAY WIDGET */}
-                        <div className={`p-3 rounded-lg border ${isToday ? 'bg-orange-900/10 border-orange-200/30' : 'bg-orange-50 border-orange-100'}`}>
-                          <div className={`text-[10px] font-bold uppercase mb-2 ${isToday ? 'text-orange-100' : 'text-orange-800'}`}>
-                             🌴 Mark Holiday
-                          </div>
-                          <div className="flex gap-2">
-                            <input
-                              type="text"
-                              placeholder="Reason / Name..."
-                              value={holidayInput}
-                              onChange={(e) => setHolidayInputs((prev) => ({ ...prev, [day.key]: e.target.value }))}
-                              className="flex-1 px-2 py-1.5 rounded text-xs text-gray-800 border-gray-200 focus:ring-2 focus:ring-orange-500"
-                            />
-                            <button
-                              type="button"
-                              disabled={!holidayInput.trim()}
-                              onClick={() => handleConfirmation(day.key, 'holiday', undefined, holidayInput.trim())}
-                              className="px-3 py-1.5 rounded bg-orange-500 text-white text-xs font-bold disabled:opacity-50 hover:bg-orange-600"
-                            >
-                              Set
-                            </button>
-                          </div>
-                        </div>
-
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-        
-        <div className="mt-8 text-center text-xs text-gray-400 font-mono">
-           Rotation: {ROTATION.join(' → ')}
-        </div>
       </div>
     </main>
   );
