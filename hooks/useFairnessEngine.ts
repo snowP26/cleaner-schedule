@@ -1,9 +1,9 @@
 import { useMemo } from 'react';
 import { ROTATION, WEEKDAYS, ANCHOR_WEEK_START, ANCHOR_START_INDEX } from '@/lib/constants';
 import { DayAssignment, Confirmation } from '@/lib/types';
-import { toYmdString } from '@/utils/dateHelpers';
+import { toYmdString, getManilaDateParts } from '@/utils/dateHelpers';
 
-export function useFairnessEngine(weekStart: Date, confirmations: Record<string, Confirmation>) {
+export function useFairnessEngine(weekStart: Date, confirmations: Record<string, Confirmation>, viewDate: Date) {
   
   const adjustedAssignments = useMemo(() => {
     const assignments: DayAssignment[] = [];
@@ -63,7 +63,16 @@ export function useFairnessEngine(weekStart: Date, confirmations: Record<string,
     const scores: Record<string, number> = {};
     ROTATION.forEach(name => { scores[name] = 0; });
     
-    Object.values(confirmations).forEach((conf) => {
+    // 1. Figure out what month we are currently viewing
+    const { year, month } = getManilaDateParts(viewDate);
+    // Creates a prefix like "2026-03" (or "2026-02" if viewing last month)
+    const targetMonthPrefix = `${year}-${String(month).padStart(2, '0')}`;
+    
+    // 2. Loop through entries so we can check the date key
+    Object.entries(confirmations).forEach(([key, conf]) => {
+      // Ignore records that don't belong to the currently viewed month
+      if (!key.startsWith(targetMonthPrefix)) return;
+
       if ((conf.status === 'cleaned' || conf.status === 'subbed') && conf.cleanedBy) {
         if (conf.cleanedBy === 'All') {
           ROTATION.forEach(name => { scores[name] += 1; });
@@ -76,7 +85,7 @@ export function useFairnessEngine(weekStart: Date, confirmations: Record<string,
     return ROTATION
       .map((name) => ({ name, score: scores[name] ?? 0 }))
       .sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
-  }, [confirmations]);
+  }, [confirmations, viewDate]);
 
   return { adjustedAssignments, leaderboard };
 }

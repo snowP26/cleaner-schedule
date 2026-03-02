@@ -14,7 +14,7 @@ export default function Home() {
 
   const { confirmations, handleConfirmation } = useScheduleData();
   const weekStart = useMemo(() => getManilaWeekStart(viewDate), [viewDate]);
-  const { adjustedAssignments, leaderboard } = useFairnessEngine(weekStart, confirmations);
+  const { adjustedAssignments, leaderboard } = useFairnessEngine(weekStart, confirmations, viewDate);
 
   // Clock Tick
   useEffect(() => {
