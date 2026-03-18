@@ -1,4 +1,4 @@
-export const ROTATION = ['James', 'Mark', 'Jayp', 'Ken', 'Mel', 'Gian', 'JC'];
+export const ROTATION = ['James', 'Jayp', 'Mel', 'JC'];
 export const WEEKDAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
 export const TIME_ZONE = 'Asia/Manila';
 
